@@ -1,0 +1,14 @@
+# PHP / Composer
+/vendor/
+/composer.lock
+
+# Node
+/node_modules/
+
+
+/runtime/
+/assets/
+/.idea/
+/.vscode/
+.DS_Store
+
