@@ -1,0 +1,2 @@
+/* Hide FilePond credits badge */
+.filepond--credits{display:none!important}
