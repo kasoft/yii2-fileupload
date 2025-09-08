@@ -95,6 +95,7 @@ Notes
 - If you add a plain `<input type="file" class="filepond" data-url="...">` without using the widget, the JS auto-initializes it on DOM ready. You can control options via data-attributes: `data-url`, `data-param`, `data-multiple`, `data-accepted`, `data-maxfiles`.
 - CSRF token is read automatically from `<meta name="csrf-token" ...>` and sent as `X-CSRF-Token` header.
 - The helper returns a JSON-ready array with `code` and `message` and the `filename` on success.
+- Chunked uploads: The widget now enables FilePond chunk uploads by default to bypass PHP post_max_size limits. The server handler accepts the FilePond chunk protocol using the same URL. It will initialize a transfer id, accept PATCH chunks at `?patch=<id>`, and assemble the file on completion. You can disable chunking with `'options' => ['chunkUploads' => false]` when rendering the widget. If you use Yii CSRF validation, either ensure the `X-CSRF-Token` header is sent (it is by default) or disable CSRF for the upload action because PATCH and HEAD requests don't carry form parameters.
 
 
 Options (UploadHandler::processUpload)

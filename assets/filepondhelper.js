@@ -47,16 +47,17 @@
       if (accepted) pondOpts.acceptedFileTypes = accepted;
       if (options.paramName) pondOpts.name = options.paramName;
       if (options.url) {
+        var commonHeaders = (function(){
+          var h = options.headers || {};
+          if (csrf && !h['X-CSRF-Token']) h['X-CSRF-Token'] = csrf;
+          return h;
+        })();
         pondOpts.server = {
           process: {
             url: options.url,
             method: 'POST',
             name: options.paramName || 'file',
-            headers: (function(){
-              var h = options.headers || {};
-              if (csrf && !h['X-CSRF-Token']) h['X-CSRF-Token'] = csrf;
-              return h;
-            })(),
+            headers: commonHeaders,
             ondata: function(formData){
               try {
                 // append extraData passed via options
@@ -76,8 +77,12 @@
               return formData;
             },
             onload: function(responseText){
+              // Try to parse JSON and return appropriate id/value
               try {
                 var data = JSON.parse(responseText);
+                // chunk init returns {id: "..."}
+                if (data && data.id) return data.id;
+                // non-chunk flow returns {filename: "..."} or {filenames:[]}
                 if (data && data.filename) return data.filename;
                 if (data && data.filenames && data.filenames.length) return data.filenames[0];
               } catch(e) {}
@@ -85,6 +90,19 @@
             }
           }
         };
+        // Enable chunking by default (can be overridden via options.chunkUploads=false)
+        if (typeof options.chunkUploads === 'undefined') options.chunkUploads = true;
+        pondOpts.chunkUploads = !!options.chunkUploads;
+        if (pondOpts.chunkUploads) {
+          pondOpts.chunkSize = options.chunkSize || 1048576; // 1MB default
+          // FilePond uses options.server.patch for chunked uploading
+          if (!pondOpts.server) pondOpts.server = {};
+          pondOpts.server.patch = {
+            url: '?patch=',
+            method: 'PATCH',
+            headers: commonHeaders
+          };
+        }
       }
       el._kasoftPond = FilePond.create(el, pondOpts);
       // bubble generic events
