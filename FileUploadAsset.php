@@ -10,7 +10,7 @@ use yii\web\AssetBundle;
  */
 class FileUploadAsset extends AssetBundle
 {
-    public $sourcePath = '@app/kasoft/fileupload/assets';
+    public $sourcePath = __DIR__ . '/assets';
     public $css = [
         'filepondhelper.css',
     ];
