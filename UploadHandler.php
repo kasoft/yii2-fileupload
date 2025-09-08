@@ -20,10 +20,109 @@ class UploadHandler
      * - createVariants: bool, when true will create a_ and w_ variants (defaults a_=[null,200], w_=[800,null]).
      * - a_: [width,height] for the a_ variant (optional, overrides default when createVariants is true or when provided).
      * - w_: [width,height] for the w_ variant (optional, overrides default when createVariants is true or when provided).
+     *
+     * Additionally supports FilePond chunked uploads when the client enables chunkUploads.
+     * This method will handle the following requests:
+     * - POST (init): no $_FILES but header 'Upload-Length' present => returns {id: <transferId>}
+     * - HEAD (offset): with ?patch=<id> => responds with header 'Upload-Offset'
+     * - PATCH (chunk): with ?patch=<id> and headers 'Upload-Offset', 'Upload-Length', 'Upload-Name' => appends data to temp file; on completion moves to target and responds 200
      */
     public static function processUpload(array $config)
     {
         $postField = $config['postName'] ?? ($config['paramName'] ?? 'file');
+
+        // Common paths
+        $basePath = $config['basePath'] ?? \Yii::getAlias('@webroot/uploads');
+        $targetPath = $config['path'] ?? null;
+
+        // Chunk temp storage
+        $tmpBase = $config['tmpPath'] ?? \Yii::getAlias('@runtime/filepond-chunks');
+        if (!is_dir($tmpBase)) { @mkdir($tmpBase, 0755, true); }
+
+        // Early handle FilePond chunk server protocol
+        $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+        $patchId = isset($_GET['patch']) ? preg_replace('/[^A-Za-z0-9_-]/', '', (string)$_GET['patch']) : null;
+        $uploadLength = isset($_SERVER['HTTP_UPLOAD_LENGTH']) ? (int)$_SERVER['HTTP_UPLOAD_LENGTH'] : null;
+        $uploadOffset = isset($_SERVER['HTTP_UPLOAD_OFFSET']) ? (int)$_SERVER['HTTP_UPLOAD_OFFSET'] : null;
+        $uploadNameHeader = isset($_SERVER['HTTP_UPLOAD_NAME']) ? (string)$_SERVER['HTTP_UPLOAD_NAME'] : null;
+
+        // Helpers for chunk files
+        $tmpFileFor = function($id){ return rtrim(\Yii::getAlias('@runtime/filepond-chunks'), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $id . '.part'; };
+        $metaFileFor = function($id){ return rtrim(\Yii::getAlias('@runtime/filepond-chunks'), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $id . '.json'; };
+
+        // 1) Init: POST without files but with Upload-Length
+        if ($method === 'POST' && $uploadLength && (!isset($_FILES[$postField]) || empty($_FILES[$postField]['tmp_name']))) {
+            $id = bin2hex(random_bytes(16));
+            // capture model_id if provided
+            $modelIdParam = $config['modelIdParam'] ?? 'model_id';
+            $initModelId = isset($_POST[$modelIdParam]) ? (string)$_POST[$modelIdParam] : null;
+            // write meta file
+            @file_put_contents($metaFileFor($id), json_encode(['length'=>$uploadLength, 'created'=>time(), 'model_id'=>$initModelId]));
+            // Respond JSON (controller may force JSON response)
+            return ['id' => $id];
+        }
+
+        // 2) HEAD offset for resume: ?patch=<id>
+        if ($method === 'HEAD' && $patchId) {
+            $tmpFile = $tmpFileFor($patchId);
+            $offset = is_file($tmpFile) ? filesize($tmpFile) : 0;
+            header('Upload-Offset: ' . $offset);
+            // IMPORTANT: end quickly, FilePond only needs header
+            exit(0);
+        }
+
+        // 3) PATCH chunk append: ?patch=<id>
+        if ($method === 'PATCH' && $patchId !== null) {
+            $tmpFile = $tmpFileFor($patchId);
+            $current = is_file($tmpFile) ? filesize($tmpFile) : 0;
+            // Verify offset matches
+            if ($uploadOffset !== null && $uploadOffset !== $current) {
+                http_response_code(409); // conflict
+                echo 'Offset mismatch';
+                exit(0);
+            }
+            // Append raw body to tmp file
+            $in = fopen('php://input', 'rb');
+            $out = fopen($tmpFile, 'ab');
+            if (!$in || !$out) {
+                http_response_code(500);
+                echo 'Cannot open streams';
+                exit(0);
+            }
+            while (!feof($in)) {
+                $buf = fread($in, 1048576);
+                if ($buf === false) break;
+                fwrite($out, $buf);
+            }
+            fclose($in); fclose($out);
+
+            // If final chunk (size equals Upload-Length), finalize: move to target directory
+            $finalSize = filesize($tmpFile);
+            if ($uploadLength !== null && $finalSize >= $uploadLength) {
+                // read meta for optional model_id
+                $meta = @json_decode(@file_get_contents($metaFileFor($patchId)), true) ?: [];
+                $metaModelId = isset($meta['model_id']) ? (string)$meta['model_id'] : null;
+                // Derive target directory similar as below
+                $safeName = self::sanitizeFilename($uploadNameHeader ?: ('upload_' . $patchId), true);
+                // compute final directory using defaults and optional modelId subdir
+                $finalDir = $targetPath === null ? rtrim($basePath, DIRECTORY_SEPARATOR) : $targetPath;
+                if ($metaModelId !== null && $metaModelId !== '') {
+                    $finalDir .= DIRECTORY_SEPARATOR . $metaModelId;
+                }
+                if (!is_dir($finalDir)) { @mkdir($finalDir, 0755, true); }
+                $finalPath = rtrim($finalDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $safeName;
+                @rename($tmpFile, $finalPath);
+                // remove meta file
+                @unlink($metaFileFor($patchId));
+                // respond OK
+                http_response_code(200);
+                echo 'OK';
+                exit(0);
+            }
+            // Not final yet
+            http_response_code(204);
+            exit(0);
+        }
         $attribute = $config['attribute'] ?? null;
         $assignMode = $config['assign'] ?? 'first';
         $createVariants = (bool)($config['createVariants'] ?? false);
