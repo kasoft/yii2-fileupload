@@ -36,10 +36,9 @@ You can render multiple instances by calling the widget multiple times with diff
 
 Usage: Controller (minimal, model-bound upload)
 -----------------------------------------------
+
 ```php
-use yii\web\Response;
-use app\models\Treetest;
-use kasoft\fileupload\UploadHandler;
+use app\models\Treetest;use kasoft\fileupload\UploadHandler;use yii\web\Response;
 
 public function actionHandle($id = null)
 {
@@ -57,10 +56,9 @@ public function actionHandle($id = null)
 
 Usage: Controller (custom basePath and variant sizes)
 ----------------------------------------------------
+
 ```php
-use yii\web\Response;
-use app\models\Treetest;
-use kasoft\fileupload\UploadHandler;
+use app\models\Treetest;use kasoft\fileupload\UploadHandler;use yii\web\Response;
 
 public function actionHandleCustom($id = null)
 {
