@@ -9,14 +9,14 @@ Installation
 Install via Composer:
 
 ```
-composer require kasoft/yii2-fileupload "~1.0"
+composer require kasoft/yii2-fileupload "~1.1"
 ```
 
 Basics
 ------
 This extension provides two parts:
 - A Widget to render one or multiple FilePond upload inputs in your views.
-- A handler class to process file uploads in your controller or model-bound workflow.
+- A handler class to process file uploads in your controller workflow.
 
 Usage: View (render one FilePond input)
 ---------------------------------------
@@ -25,90 +25,151 @@ use kasoft\fileupload\FileUpload;
 
 echo FileUpload::widget([
     'id' => 'my-filepond',
-    'url' => \yii\helpers\Url::to(['/upload/handle']), // controller action URL
-    'paramName' => 'file',
-    'acceptedFiles' => 'image/*',
-    'maxFiles' => 5,
+    'url' => ['/upload/handle'], // controller action route
+    'model' => ['model_id' => $model->id], // additional parameters for URL generation
     'multiple' => true,
+    'maxFiles' => 5,
+    'acceptedFiles' => 'image/*',
+    'options' => [
+        // additional FilePond options
+        'chunkUploads' => true, // enabled by default for large files
+    ],
 ]);
 ```
-You can render multiple instances by calling the widget multiple times with different `id` values.
 
-Usage: Controller (minimal, model-bound upload)
------------------------------------------------
+Widget Properties:
+- `id`: HTML ID for the filepond input (default: 'my-filepond')
+- `url`: Route or URL for the upload handler
+- `model`: Array of parameters to pass to the upload URL
+- `multiple`: Allow multiple file selection (default: true)
+- `maxFiles`: Maximum number of files (default: 5)
+- `acceptedFiles`: MIME types or file extensions (e.g., 'image/*', 'image/*,application/pdf')
+- `options`: Additional FilePond configuration options
+
+Usage: Controller (basic file upload)
+-------------------------------------
 
 ```php
-use app\models\Treetest;use kasoft\fileupload\UploadHandler;use yii\web\Response;
+use kasoft\fileupload\UploadHandler;
 
-public function actionHandle($id = null)
+public function actionHandle($model_id = null)
 {
-    \Yii::$app->response->format = Response::FORMAT_JSON;
-    return UploadHandler::processUpload([
-        'modelClass' => Treetest::class, // optional, set to bind to an AR
-        'modelId' => $id,                // optional, handler also reads POST model_id
-        'attribute' => 'file',           // AR attribute to store filename
-        'postName' => 'file',            // input field name
-        // basePath defaults to @webroot/uploads and subdir @webroot/uploads/{model_id} is created automatically
-        'createVariants' => false,       // set true to generate a_ and w_ image variants
+    UploadHandler::processUpload([
+        'targetPath' => \Yii::getAlias('@webroot/uploads'),
+        'modelClass' => \app\models\YourModel::class,
     ]);
+    // Handler terminates the request automatically
 }
 ```
 
-Usage: Controller (custom basePath and variant sizes)
+Usage: Controller (model-bound upload with auto-save)
 ----------------------------------------------------
 
 ```php
-use app\models\Treetest;use kasoft\fileupload\UploadHandler;use yii\web\Response;
+use kasoft\fileupload\UploadHandler;
 
-public function actionHandleCustom($id = null)
+public function actionHandle($model_id = null, $model_attribute = 'filename')
 {
-    \Yii::$app->response->format = Response::FORMAT_JSON;
-    return UploadHandler::processUpload([
-        'modelClass' => Treetest::class,
-        'modelId' => $id,
-        'attribute' => 'file',
-        'postName' => 'file',
-        'basePath' => \Yii::getAlias('@webroot/custom-uploads'),
-        // Configure a_ and w_ variants (4 values across both arrays):
-        'createVariants' => true,
-        'a_' => [null, 150],  // a_ prefix => height 150 keep aspect
-        'w_' => [1200, null], // w_ prefix => width 1200 keep aspect
-        // cleanTarget defaults to true when modelId is used; set explicitly if needed
-        // 'cleanTarget' => true,
+    UploadHandler::processUpload([
+        'targetPath' => \Yii::getAlias('@webroot/uploads'),
+        'tmpPath' => \Yii::getAlias('@runtime/fileupload'), // for chunked uploads
+        'modelClass' => \app\models\YourModel::class,
     ]);
+    // The handler will:
+    // 1. Create model_id subdirectory if moveToIdFolder=1 is passed
+    // 2. Save filename to model attribute if model_id and model_attribute are passed
+    // 3. Handle chunked uploads automatically
 }
 ```
 
-Working example in this app
----------------------------
-This repository ships with a minimal demo:
+URL Parameters (GET)
+-------------------
+The upload handler reads these parameters from the request:
+
+- `model_id`: ID of the model to update
+- `model_attribute`: Model attribute to store the filename
+- `moveToIdFolder`: If set to 1, creates a subfolder named after the model_id
+- `emptyIdFolder`: If set to 1, empties the model_id folder before upload
+- `patch`: Used internally for chunked uploads
+- `chunkFileId`: Alternative parameter for chunk file identification
+
+Chunked Uploads
+---------------
+The extension supports FilePond's chunked upload protocol automatically:
+
+1. **Initialization (POST)**: Client sends Upload-Length header to get a transfer ID
+2. **Upload Chunks (PATCH)**: Client sends file chunks using ?patch=<id>
+3. **Resume Support (HEAD)**: Client can query current offset for resume
+4. **Completion**: When all chunks are received, file is moved to final location
+
+Chunked uploads bypass PHP's `post_max_size` and `upload_max_filesize` limitations.
+
+File Processing
+---------------
+The `UploadHandler::processFile()` method handles:
+
+- Filename sanitization (removes special characters)
+- Directory creation with proper permissions
+- Model integration (saves filename to specified attribute)
+- Support for organized folder structure by model ID
+
+Image Conversion
+----------------
+The extension includes an image conversion utility:
+
+```php
+use kasoft\fileupload\UploadHandler;
+
+// Convert/resize image
+$success = UploadHandler::convertImage(
+    $sourceFile,     // source image path
+    $targetFile,     // target image path  
+    $targetWidth,    // target width (null to maintain aspect)
+    $targetHeight    // target height (null to maintain aspect)
+);
+```
+
+Supports JPEG, PNG, and GIF formats with transparency preservation for PNG.
+
+Configuration Options (UploadHandler::processUpload)
+---------------------------------------------------
+
+- `targetPath`: Directory where files will be stored (default: @webroot/uploads)
+- `tmpPath`: Temporary directory for chunked uploads (default: @runtime/fileupload)
+- `modelClass`: ActiveRecord class name for model binding
+- `chunkFileId`: Custom chunk file identifier (usually handled automatically)
+
+Security Features
+-----------------
+
+- Filename sanitization removes dangerous characters
+- Directory permissions are set to 0755
+- Chunk file IDs are sanitized to prevent directory traversal
+- Support for CSRF token validation via X-CSRF-Token header
+
+Working Example
+---------------
+This repository includes a demo implementation. Check:
 - Controller: `controllers/UploadController.php`
 - View: `views/upload/index.php`
 
-Open `/index.php?r=upload/index` (or pretty URL `/upload/index`) to see the demo. Ensure the directory `@webroot/uploads` exists and is writable by the web server user.
+Ensure `@webroot/uploads` and `@runtime/fileupload` directories exist and are writable.
 
-Notes
------
-- Assets (FilePond JS/CSS) are provided via Composer (npm-asset/filepond) and auto-registered by the widget.
-- If you add a plain `<input type="file" class="filepond" data-url="...">` without using the widget, the JS auto-initializes it on DOM ready. You can control options via data-attributes: `data-url`, `data-param`, `data-multiple`, `data-accepted`, `data-maxfiles`.
-- CSRF token is read automatically from `<meta name="csrf-token" ...>` and sent as `X-CSRF-Token` header.
-- The helper returns a JSON-ready array with `code` and `message` and the `filename` on success.
-- Chunked uploads: The widget now enables FilePond chunk uploads by default to bypass PHP post_max_size limits. The server handler accepts the FilePond chunk protocol using the same URL. It will initialize a transfer id, accept PATCH chunks at `?patch=<id>`, and assemble the file on completion. You can disable chunking with `'options' => ['chunkUploads' => false]` when rendering the widget. If you use Yii CSRF validation, either ensure the `X-CSRF-Token` header is sent (it is by default) or disable CSRF for the upload action because PATCH and HEAD requests don't carry form parameters.
+JavaScript Integration
+---------------------
+The widget automatically registers required assets and initializes FilePond. The JavaScript looks for:
+- `window.KasoftFileUploadInit` function for manual initialization
+- CSRF token from `<meta name="csrf-token">` for secure uploads
 
+Multiple widget instances are supported by using different `id` values.
 
-Options (UploadHandler::processUpload)
--------------------------------------
-- Always pass a configuration array.
-- Keys:
-  - basePath: Base directory for uploads (default: @webroot/uploads). Used when no explicit path is given.
-  - path: Absolute target directory. Overrides basePath if set.
-  - cleanTarget: If true, the target directory is emptied before saving the new file(s). Defaults to true when a modelId-based subfolder is used; otherwise false.
-  - postName / paramName: Name of the file field (default: "file").
-  - createVariants: If true or when variant arrays are provided, create image variants with prefixes a_ and w_.
-  - a_: [width,height] for the a_ variant (e.g. [null,200] for height 200 maintain aspect).
-  - w_: [width,height] for the w_ variant (e.g. [800,null] for width 800 maintain aspect).
-  - model / modelClass + modelId: ActiveRecord instance or provide class and id to auto-load.
-  - attribute: Model attribute to store the filename(s).
-  - saveModel: Whether to save the model (default: true if model present, else true by default here).
-  - validate: Whether to validate on save (default: false).
-  - assign: "first" | "json" | "array" for multi-file assignment handling.
+Error Handling
+--------------
+The handler returns appropriate HTTP status codes:
+- 200: Success
+- 201: Chunk transfer initialized
+- 204: Chunk received, more expected
+- 409: Chunk offset conflict (resume scenario)
+- 500: Server errors (directory issues, file operations)
+
+All responses terminate the PHP execution automatically.
