@@ -1,150 +1,171 @@
-(function(){
-  function getCsrf() {
-    var meta = document.querySelector('meta[name="csrf-token"]');
-    return meta ? meta.getAttribute('content') : null;
-  }
-  function ensureFilePond(cb){
-    if (typeof window.FilePond !== 'undefined' && typeof window.FilePond.create === 'function') return cb();
-    var tries = 0;
-    var intv = setInterval(function(){
-      tries++;
-      if (typeof window.FilePond !== 'undefined' && typeof window.FilePond.create === 'function') {
-        clearInterval(intv);
-        cb();
-      } else if (tries > 50) {
-        clearInterval(intv);
-      }
-    }, 100);
-  }
-  function toAcceptedTypes(val){
-    if (!val) return undefined;
-    if (Array.isArray(val)) return val;
-    // split comma separated string
-    if (typeof val === 'string') {
-      var arr = val.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
-      if (arr.length === 0 && val) return [val];
-      return arr;
-    }
-    return undefined;
-  }
-  window.KasoftFileUploadInit = function(id, options){
-    ensureFilePond(function(){
-      var el = typeof id === 'string' ? document.getElementById(id) : id;
-      if (!el) return;
-      options = options || {};
-      var csrf = getCsrf();
-      // ensure input name reflects paramName
-      if (options.paramName && el.name !== options.paramName) el.name = options.paramName;
-      // destroy old pond
-      if (el._kasoftPond && el._kasoftPond.destroy) {
-        try { el._kasoftPond.destroy(); } catch(e) {}
-      }
-      var pondOpts = {
-        allowMultiple: !!options.multiple,
-      };
-      if (options.maxFiles != null) pondOpts.maxFiles = options.maxFiles;
-      var accepted = toAcceptedTypes(options.acceptedFiles);
-      if (accepted) pondOpts.acceptedFileTypes = accepted;
-      if (options.paramName) pondOpts.name = options.paramName;
-      if (options.url) {
-        var commonHeaders = (function(){
-          var h = options.headers || {};
-          if (csrf && !h['X-CSRF-Token']) h['X-CSRF-Token'] = csrf;
-          return h;
-        })();
-        pondOpts.server = {
-          process: {
-            url: options.url,
-            method: 'POST',
-            name: options.paramName || 'file',
-            headers: commonHeaders,
-            ondata: function(formData){
-              try {
-                // append extraData passed via options
-                if (options && options.extraData) {
-                  for (var key in options.extraData) {
-                    if (Object.prototype.hasOwnProperty.call(options.extraData, key)) {
-                      formData.append(key, options.extraData[key]);
-                    }
-                  }
-                }
-                // append data-model-id attribute if present
-                var modelId = el && el.getAttribute && el.getAttribute('data-model-id');
-                if (modelId) {
-                  formData.append('model_id', modelId);
-                }
-              } catch (e) {}
-              return formData;
-            },
-            onload: function(responseText){
-              // Try to parse JSON and return appropriate id/value
-              try {
-                var data = JSON.parse(responseText);
-                // chunk init returns {id: "..."}
-                if (data && data.id) return data.id;
-                // non-chunk flow returns {filename: "..."} or {filenames:[]}
-                if (data && data.filename) return data.filename;
-                if (data && data.filenames && data.filenames.length) return data.filenames[0];
-              } catch(e) {}
-              return responseText;
-            }
-          }
-        };
-        // Enable chunking by default (can be overridden via options.chunkUploads=false)
-        if (typeof options.chunkUploads === 'undefined') options.chunkUploads = true;
-        pondOpts.chunkUploads = !!options.chunkUploads;
-        if (pondOpts.chunkUploads) {
-          pondOpts.chunkSize = options.chunkSize || 1048576; // 1MB default
-          // FilePond uses options.server.patch for chunked uploading
-          if (!pondOpts.server) pondOpts.server = {};
-          pondOpts.server.patch = {
-            url: '?patch=',
-            method: 'PATCH',
-            headers: commonHeaders
-          };
-        }
-      }
-      el._kasoftPond = FilePond.create(el, pondOpts);
-      // bubble generic events
-      el._kasoftPond.on('processfile', function(error, file){
-        var detail = { file: file, error: error };
-        var evName = error ? 'kasoft:fileupload:error' : 'kasoft:fileupload:success';
-        var event = new CustomEvent(evName, { detail: detail });
-        el.dispatchEvent(event);
-      });
-      return el._kasoftPond;
-    });
-  };
+(function () {
+    'use strict';
 
-  function autoInit(){
-    ensureFilePond(function(){
-      var nodes = document.querySelectorAll('input.filepond');
-      var csrf = getCsrf();
-      Array.prototype.forEach.call(nodes, function(el){
-        if (el._kasoftPond) return;
-        var opts = {
-          url: el.getAttribute('data-url') || el.getAttribute('data-action') || el.form && el.form.action || window.location.href,
-          paramName: el.getAttribute('data-param') || el.getAttribute('name') || 'file',
-          multiple: (el.getAttribute('data-multiple') || (el.hasAttribute('multiple') ? 'true':'false')) === 'true',
-        };
-        var acc = el.getAttribute('data-accepted');
-        if (acc) opts.acceptedFiles = acc;
-        var max = el.getAttribute('data-maxfiles');
-        if (max) opts.maxFiles = parseInt(max, 10);
-        var dataModelId = el.getAttribute('data-model-id');
-        if (dataModelId) {
-          opts.extraData = opts.extraData || {};
-          opts.extraData.model_id = dataModelId;
+    // Utility functions
+    function getCsrf() {
+        var meta = document.querySelector('meta[name="csrf-token"]');
+        return meta ? meta.getAttribute('content') : null;
+    }
+
+    function ensureFilePond(callback) {
+        if (typeof window.FilePond !== 'undefined' && typeof window.FilePond.create === 'function') {
+            return callback();
         }
-        opts.headers = opts.headers || {};
-        if (csrf) opts.headers['X-CSRF-Token'] = csrf;
-        window.KasoftFileUploadInit(el, opts);
-      });
-    });
-  }
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', autoInit);
-  } else {
-    autoInit();
-  }
+        var attempts = 0;
+        var interval = setInterval(function () {
+            attempts++;
+            if (typeof window.FilePond !== 'undefined' && typeof window.FilePond.create === 'function') {
+                clearInterval(interval);
+                callback();
+            } else if (attempts > 50) {
+                clearInterval(interval);
+            }
+        }, 100);
+    }
+
+    function parseAcceptedTypes(value) {
+        if (!value) return undefined;
+        if (Array.isArray(value)) return value;
+        if (typeof value === 'string') {
+            var types = value.split(',').map(function (s) {
+                return s.trim();
+            }).filter(Boolean);
+            return types.length > 0 ? types : undefined;
+        }
+        return undefined;
+    }
+
+    function resolveUploadUrl(url, element) {
+        // Return string URL if provided
+        if (typeof url === 'string' && url.length > 0) {
+            return url;
+        }
+
+        // Try to call function if provided
+        if (typeof url === 'function') {
+            try {
+                var result = url();
+                if (typeof result === 'string' && result.length > 0) {
+                    return result;
+                }
+            } catch (e) {
+                console.warn('[Kasoft FileUpload] URL function failed:', e);
+            }
+        }
+
+        // Fallback to form action or current page
+        var fallback = '';
+        if (element && element.form && element.form.action) {
+            fallback = element.form.action;
+        } else {
+            fallback = window.location.href;
+        }
+
+        return fallback;
+    }
+
+    // Main initialization function
+    window.KasoftFileUploadInit = function (elementId, options) {
+
+        ensureFilePond(function () {
+            var element = typeof elementId === 'string' ? document.getElementById(elementId) : elementId;
+            if (!element) {
+                console.error('[Kasoft FileUpload] Element not found:', elementId);
+                return;
+            }
+
+            options = options || {};
+            var csrf = getCsrf();
+
+            // Configure FilePond options
+            var pondConfig = {
+                allowMultiple: Boolean(options.multiple),
+                //allowRemove: false,   // hides pre-upload remove
+                allowRevert: false    // hides post-upload revert (the "X")
+            };
+
+            if (options.maxFiles != null) {
+                pondConfig.maxFiles = parseInt(options.maxFiles, 10);
+            }
+
+            var acceptedTypes = parseAcceptedTypes(options.acceptedFiles);
+            if (acceptedTypes) {
+                pondConfig.acceptedFileTypes = acceptedTypes;
+            }
+
+            // Enable chunked uploads
+            var enableChunking = options.chunkUploads !== false;
+            pondConfig.chunkUploads = enableChunking;
+
+            if (enableChunking) {
+                pondConfig.chunkSize = options.chunkSize || 1024 * 1024; // 1 MB Default
+                pondConfig.chunkRetryDelays = [500, 1000, 3000];
+            }
+
+            if(options.labelIdle !== undefined) {
+                pondConfig.labelIdle = options.labelIdle;
+            }
+
+            // Resolve upload URL
+            pondConfig.server = resolveUploadUrl(options.url, element);
+
+            // console.log('[Kasoft FileUpload] FilePond config:', pondConfig);
+
+            // Create FilePond instance
+            try {
+                element._kasoftPond = FilePond.create(element, pondConfig);
+
+                // Set up event handlers
+                element._kasoftPond.on('processfile', function (error, file) {
+                    var eventName = error ? 'kasoft:fileupload:error' : 'kasoft:fileupload:success';
+                    var event = new CustomEvent(eventName, {
+                        detail: { file: file, error: error }
+                    });
+                    element.dispatchEvent(event);
+
+                    if (!error) {
+                        // Neues hidden input für jeden Upload
+                        var hiddenInput = document.createElement("input");
+                        hiddenInput.type = "hidden";
+                        hiddenInput.name = "uploaded_file[]"; // [] für Mehrfach-Uploads
+                        hiddenInput.value = file.serverId || file.filename;
+
+                        // Hänge das hidden input direkt an den Root-Container
+                        var root = document.getElementById(elementId);
+                        root.appendChild(hiddenInput);
+                    }
+                });
+
+                return element._kasoftPond;
+            } catch (e) {
+                console.error('[Kasoft FileUpload] Failed to create FilePond instance:', e);
+            }
+
+        });
+    };
+
+
+    // Parse upload response
+    function parseUploadResponse(responseText) {
+        try {
+            var data = JSON.parse(responseText);
+
+            // Return appropriate value based on response structure
+            if (data.id) return data.id;
+            if (data.filename) return data.filename;
+            if (data.filenames && Array.isArray(data.filenames) && data.filenames.length > 0) {
+                return data.filenames[0];
+            }
+            if (data.file) return data.file;
+
+            // If it's an object but no recognized properties, return as string
+            return JSON.stringify(data);
+        } catch (e) {
+            // If not valid JSON, return as-is
+        }
+
+        return responseText || 'upload_complete';
+    }
+
+
 })();

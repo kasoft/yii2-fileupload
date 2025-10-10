@@ -13,7 +13,7 @@
     "require": {
         "php": ">=8.1",
         "yiisoft/yii2": "~2.0.43",
-        "npm-asset/filepond": "^4.0"
+        "npm-asset/filepond": "^4.20"
     },
     "config": {
         "process-timeout": 1800,

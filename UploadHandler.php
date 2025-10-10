@@ -2,6 +2,8 @@
 
 namespace kasoft\fileupload;
 
+use Yii;
+
 /**
  * Static upload helper class to be safely called from controllers.
  */
@@ -9,242 +11,220 @@ class UploadHandler
 {
     /**
      * Process an upload based on a configuration array.
-     * Required keys: none (uses sensible defaults); Recommended: path or basePath.
-     * - basePath: string, defaults to @webroot/uploads if not set.
-     * - path: string|null, target directory; overrides basePath if set.
-     * - cleanTarget: bool, empty target dir before saving (defaults to true when modelId is used).
-     * - postName/paramName: string, input name, default 'file'.
-     * - model / modelClass + modelId: ActiveRecord instance or autoload class+id.
-     * - attribute: string, model attribute to store filename(s).
-     * - assign: 'first'|'json'|'array' for multi-file assignment.
-     * - createVariants: bool, when true will create a_ and w_ variants (defaults a_=[null,200], w_=[800,null]).
-     * - a_: [width,height] for the a_ variant (optional, overrides default when createVariants is true or when provided).
-     * - w_: [width,height] for the w_ variant (optional, overrides default when createVariants is true or when provided).
-     *
-     * Additionally supports FilePond chunked uploads when the client enables chunkUploads.
-     * This method will handle the following requests:
-     * - POST (init): no $_FILES but header 'Upload-Length' present => returns {id: <transferId>}
-     * - HEAD (offset): with ?patch=<id> => responds with header 'Upload-Offset'
-     * - PATCH (chunk): with ?patch=<id> and headers 'Upload-Offset', 'Upload-Length', 'Upload-Name' => appends data to temp file; on completion moves to target and responds 200
      */
     public static function processUpload(array $config)
     {
-        $postField = $config['postName'] ?? ($config['paramName'] ?? 'file');
+        $modelClass = $config['modelClass'] ?? null;
 
-        // Common paths
-        $basePath = $config['basePath'] ?? \Yii::getAlias('@webroot/uploads');
-        $targetPath = $config['path'] ?? null;
+        // Target path
+        $targetPath = $config['targetPath'] ?? \Yii::getAlias('@webroot/uploads');
+        if (!is_dir($targetPath)) {
+            @mkdir($targetPath, 0755, true);
+            if (!is_dir($targetPath)) {
+                \Yii::$app->response->statusCode = 500;
+                \Yii::$app->response->format = \yii\web\Response::FORMAT_RAW;
+                \Yii::$app->response->content = 'Target directory is not writable.".';
+                \Yii::$app->response->send();
+                \Yii::$app->end();
+            }
+        }
 
         // Chunk temp storage
-        $tmpBase = $config['tmpPath'] ?? \Yii::getAlias('@runtime/filepond-chunks');
-        if (!is_dir($tmpBase)) { @mkdir($tmpBase, 0755, true); }
+        $tmpPath = $config['tmpPath'] ?? \Yii::getAlias('@runtime/fileupload');
+        if (!is_dir($tmpPath)) {
+            @mkdir($tmpPath, 0755, true);
+        }
 
         // Early handle FilePond chunk server protocol
         $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-        $patchId = isset($_GET['patch']) ? preg_replace('/[^A-Za-z0-9_-]/', '', (string)$_GET['patch']) : null;
+        $patchId = $_GET['patch'] ?? ($config['chunkFileId'] ?? null);
+        if ($patchId) {
+            $patchId = preg_replace('/[^A-Za-z0-9_-]/', '', (string)$patchId);
+        }
+
         $uploadLength = isset($_SERVER['HTTP_UPLOAD_LENGTH']) ? (int)$_SERVER['HTTP_UPLOAD_LENGTH'] : null;
         $uploadOffset = isset($_SERVER['HTTP_UPLOAD_OFFSET']) ? (int)$_SERVER['HTTP_UPLOAD_OFFSET'] : null;
         $uploadNameHeader = isset($_SERVER['HTTP_UPLOAD_NAME']) ? (string)$_SERVER['HTTP_UPLOAD_NAME'] : null;
+        if ($uploadNameHeader) {
+            // reverse potential encodeURIComponent from client
+            $uploadNameHeader = urldecode($uploadNameHeader);
+        }
 
         // Helpers for chunk files
-        $tmpFileFor = function($id){ return rtrim(\Yii::getAlias('@runtime/filepond-chunks'), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $id . '.part'; };
-        $metaFileFor = function($id){ return rtrim(\Yii::getAlias('@runtime/filepond-chunks'), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $id . '.json'; };
+        $tmpFileFor = function ($id) use ($tmpPath) {
+            return rtrim($tmpPath, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $id . '.part';
+        };
 
         // 1) Init: POST without files but with Upload-Length
-        if ($method === 'POST' && $uploadLength && (!isset($_FILES[$postField]) || empty($_FILES[$postField]['tmp_name']))) {
+        if ($method === 'POST' && $uploadLength) {
             $id = bin2hex(random_bytes(16));
-            // capture model_id if provided
-            $modelIdParam = $config['modelIdParam'] ?? 'model_id';
-            $initModelId = isset($_POST[$modelIdParam]) ? (string)$_POST[$modelIdParam] : null;
-            // write meta file
-            @file_put_contents($metaFileFor($id), json_encode(['length'=>$uploadLength, 'created'=>time(), 'model_id'=>$initModelId]));
-            // Respond JSON (controller may force JSON response)
-            return ['id' => $id];
+
+            // IMPORTANT: Return plain text id per FilePond spec and terminate
+            \Yii::$app->response->statusCode = 201; // Created
+            \Yii::$app->response->format = \yii\web\Response::FORMAT_RAW;
+            \Yii::$app->response->headers->set('Content-Type', 'text/plain; charset=utf-8');
+            \Yii::$app->response->headers->set('Cache-Control', 'no-cache');
+            \Yii::$app->response->content = $id;
+            \Yii::$app->response->send();
+            \Yii::$app->end();
         }
 
         // 2) HEAD offset for resume: ?patch=<id>
         if ($method === 'HEAD' && $patchId) {
             $tmpFile = $tmpFileFor($patchId);
             $offset = is_file($tmpFile) ? filesize($tmpFile) : 0;
+
+            // Set headers for FilePond
             header('Upload-Offset: ' . $offset);
-            // IMPORTANT: end quickly, FilePond only needs header
-            exit(0);
+            header('Cache-Control: no-cache');
+
+            // IMPORTANT: Don't return JSON, just end with proper HTTP status
+            \Yii::$app->response->format = \yii\web\Response::FORMAT_RAW;
+            \Yii::$app->response->statusCode = 200;
+            \Yii::$app->response->send();
+            \Yii::$app->end();
         }
 
         // 3) PATCH chunk append: ?patch=<id>
         if ($method === 'PATCH' && $patchId !== null) {
             $tmpFile = $tmpFileFor($patchId);
             $current = is_file($tmpFile) ? filesize($tmpFile) : 0;
+
             // Verify offset matches
             if ($uploadOffset !== null && $uploadOffset !== $current) {
-                http_response_code(409); // conflict
-                echo 'Offset mismatch';
-                exit(0);
+                // Inform client about current offset so it can recover
+                header('Upload-Offset: ' . $current);
+                header('Cache-Control: no-store');
+                \Yii::$app->response->statusCode = 409; // conflict
+                \Yii::$app->response->format = \yii\web\Response::FORMAT_RAW;
+                \Yii::$app->response->content = 'Offset mismatch';
+                \Yii::$app->response->send();
+                \Yii::$app->end();
             }
+
             // Append raw body to tmp file
             $in = fopen('php://input', 'rb');
             $out = fopen($tmpFile, 'ab');
             if (!$in || !$out) {
-                http_response_code(500);
-                echo 'Cannot open streams';
-                exit(0);
+                \Yii::$app->response->statusCode = 500;
+                \Yii::$app->response->format = \yii\web\Response::FORMAT_RAW;
+                \Yii::$app->response->content = 'Cannot open streams';
+                \Yii::$app->response->send();
+                \Yii::$app->end();
             }
+
             while (!feof($in)) {
-                $buf = fread($in, 1048576);
+                $buf = fread($in, 1048576); //1 MB pro Durchgang
                 if ($buf === false) break;
                 fwrite($out, $buf);
             }
-            fclose($in); fclose($out);
+            fclose($in);
+            fclose($out);
+
+            // Get final size after writing
+            clearstatcache();
+            $finalSize = filesize($tmpFile);
 
             // If final chunk (size equals Upload-Length), finalize: move to target directory
-            $finalSize = filesize($tmpFile);
             if ($uploadLength !== null && $finalSize >= $uploadLength) {
-                // read meta for optional model_id
-                $meta = @json_decode(@file_get_contents($metaFileFor($patchId)), true) ?: [];
-                $metaModelId = isset($meta['model_id']) ? (string)$meta['model_id'] : null;
-                // Derive target directory similar as below
-                $safeName = self::sanitizeFilename($uploadNameHeader ?: ('upload_' . $patchId), true);
-                // compute final directory using defaults and optional modelId subdir
-                $finalDir = $targetPath === null ? rtrim($basePath, DIRECTORY_SEPARATOR) : $targetPath;
-                if ($metaModelId !== null && $metaModelId !== '') {
-                    $finalDir .= DIRECTORY_SEPARATOR . $metaModelId;
+
+                $params = Yii::$app->request->get();
+                if (self::processFile($targetPath, $uploadNameHeader, $tmpFile, $params, $modelClass)) {
+
+                    // Set headers and respond OK
+                    header('Upload-Offset: ' . $finalSize);
+                    header('Cache-Control: no-store');
+                    \Yii::$app->response->statusCode = 200;
+                    \Yii::$app->response->format = \yii\web\Response::FORMAT_RAW;
+                    \Yii::$app->response->content = 'Upload complete';
+                    \Yii::$app->response->send();
+                    \Yii::$app->end();
+                } else {
+                    \Yii::$app->response->statusCode = 500;
+                    \Yii::$app->response->format = \yii\web\Response::FORMAT_RAW;
+                    \Yii::$app->response->content = 'Failed to move file';
+                    \Yii::$app->response->send();
+                    \Yii::$app->end();
                 }
-                if (!is_dir($finalDir)) { @mkdir($finalDir, 0755, true); }
-                $finalPath = rtrim($finalDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $safeName;
-                @rename($tmpFile, $finalPath);
-                // remove meta file
-                @unlink($metaFileFor($patchId));
-                // respond OK
-                http_response_code(200);
-                echo 'OK';
-                exit(0);
             }
-            // Not final yet
-            http_response_code(204);
-            exit(0);
-        }
-        $attribute = $config['attribute'] ?? null;
-        $assignMode = $config['assign'] ?? 'first';
-        $createVariants = (bool)($config['createVariants'] ?? false);
-        $variantA = $config['a_'] ?? null; // [w,h]
-        $variantW = $config['w_'] ?? null; // [w,h]
 
-        // Derive model and target path
-        $model = $config['model'] ?? null;
-        $modelClass = $config['modelClass'] ?? null;
-        $modelIdParam = $config['modelIdParam'] ?? 'model_id';
-        $modelId = $config['modelId'] ?? (isset($_POST[$modelIdParam]) ? $_POST[$modelIdParam] : null);
-        if (!$model && $modelClass && $modelId !== null) {
-            try { $model = $modelClass::findOne($modelId); } catch (\Throwable $e) { /* ignore */ }
-        }
-        $basePath = $config['basePath'] ?? \Yii::getAlias('@webroot/uploads');
-        $targetPath = $config['path'] ?? null;
-        if ($targetPath === null) {
-            $targetPath = rtrim($basePath, DIRECTORY_SEPARATOR);
-            if ($modelId !== null && $modelId !== '') {
-                $targetPath .= DIRECTORY_SEPARATOR . $modelId;
-            }
+            // Not final yet - continue chunking
+            header('Upload-Offset: ' . $finalSize);
+            header('Cache-Control: no-store');
+            \Yii::$app->response->statusCode = 204; // No Content
+            \Yii::$app->response->format = \yii\web\Response::FORMAT_RAW;
+            \Yii::$app->response->headers->set('Content-Length', '0');
+            \Yii::$app->response->send();
+            \Yii::$app->end();
         }
 
-        // Clean target dir when needed
-        $shouldClean = array_key_exists('cleanTarget', $config) ? (bool)$config['cleanTarget'] : ($modelId !== null && $modelId !== '');
-        if (is_dir($targetPath) && $shouldClean) {
-            @self::delete_folder($targetPath);
+        if ($method === 'DELETE') {
+            \Yii::$app->response->statusCode = 500;
+            \Yii::$app->response->format = \yii\web\Response::FORMAT_RAW;
+            \Yii::$app->response->content = 'Not implemented yet.';
+            \Yii::$app->response->send();
+            \Yii::$app->end();
+
         }
+
+        // Normal Upload without Chunks
+        $files = reset($_FILES);
+        $params = Yii::$app->request->get();
+        if (self::processFile($targetPath, $files['name'] ?? null, $files['tmp_name'] ?? null, $params, $modelClass)) {
+            \Yii::$app->response->statusCode = 200;
+            \Yii::$app->response->format = \yii\web\Response::FORMAT_RAW;
+            \Yii::$app->response->send();
+            \Yii::$app->end();
+        }
+
+    }
+
+
+    public static function processFile($targetPath, $filename, $tmp_name, $params, $modelClass = null)
+    {
+
+        // Derive target directory similar as below
+        $safeName = self::sanitizeFilename($filename ?: ('upload_' . time()), true);
+
         if (!is_dir($targetPath)) {
             @mkdir($targetPath, 0755, true);
-        }
-        if (!is_dir($targetPath)) {
-            return ['code' => 'error', 'message' => 'Ordner zum Speichern der Datei konnte nicht erstellt werden.'];
-        }
-
-        if (!isset($_FILES[$postField])) {
-            return ['code' => 'error', 'message' => 'No file posted.'];
-        }
-
-        $names = $_FILES[$postField]['name'];
-        $tmps = $_FILES[$postField]['tmp_name'];
-        $isMultiple = is_array($names);
-        $saved = [];
-
-        $doVariants = $createVariants || $variantA !== null || $variantW !== null;
-        if ($doVariants) {
-            if ($variantA === null) $variantA = [null, 200];
-            if ($variantW === null) $variantW = [800, null];
-        }
-
-        $processOne = function($name, $tmp) use ($targetPath, $doVariants, $variantA, $variantW, &$saved) {
-            $original = self::sanitizeFilename($name, true);
-            if (!$tmp || !is_uploaded_file($tmp)) {
-                return ['code' => 'error', 'message' => 'Failed to upload.'];
+            if (!is_dir($targetPath)) {
+                return ['code' => 'error', 'message' => 'Could not create folder to save file.'];
             }
-            $final = rtrim($targetPath, '/').'/'.$original;
-            if (!@move_uploaded_file($tmp, $final)) {
-                return ['code' => 'error', 'message' => 'Failed to move uploaded file.'];
-            }
-            if ($doVariants) {
-                $pi = pathinfo($final);
-                $base = ($pi['dirname'] ?? dirname($final)).'/';
-                if (is_array($variantA) && (isset($variantA[0]) || isset($variantA[1]))) {
-                    @self::convertImage($final, $base.'a_'.($pi['basename'] ?? basename($final)), $variantA[0], $variantA[1]);
-                }
-                if (is_array($variantW) && (isset($variantW[0]) || isset($variantW[1]))) {
-                    @self::convertImage($final, $base.'w_'.($pi['basename'] ?? basename($final)), $variantW[0], $variantW[1]);
-                }
-            }
-            $saved[] = $original;
-            return ['code' => 'success', 'message' => 'File uploaded successfully.', 'filename' => $original];
-        };
-
-        if ($isMultiple) {
-            $results = [];
-            foreach ($names as $idx => $n) {
-                if ($n === null || $n === '') continue;
-                $results[] = $processOne($n, $tmps[$idx] ?? null);
-            }
-            $response = ['code' => 'success', 'message' => 'Files uploaded successfully.', 'filenames' => $saved, 'results' => $results];
-        } else {
-            $res = $processOne($names, $tmps);
-            if ($res['code'] !== 'success') return $res;
-            $response = $res;
         }
 
-        // Optional model binding
-        if ($model && $attribute) {
-            $value = null;
-            if (!empty($saved)) {
-                if ($isMultiple) {
-                    if ($assignMode === 'json') {
-                        $value = json_encode($saved);
-                    } elseif ($assignMode === 'array') {
-                        $value = $saved;
-                    } else {
-                        $value = $saved[0];
+        if (!empty($params['moveToIdFolder']) && !empty($params['model_id'])) {
+            $metaModelId = $params['model_id'];
+            $finalDir = rtrim($targetPath, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $metaModelId;
+            if (!is_dir($finalDir)) {
+                @mkdir($finalDir, 0755, true);
+            } else {
+                if (!empty($params['emptyIdFolder'])) {
+                    self::delete_folder($finalDir);
+                    @mkdir($finalDir, 0755, true);
+                    if (!is_dir($finalDir)) {
+                        return ['code' => 'error', 'message' => 'Could not create folder to save file.'];
                     }
-                } else {
-                    $value = $saved[0];
                 }
             }
-            try {
-                $model->{$attribute} = $value;
-                $saveModel = array_key_exists('saveModel', $config) ? (bool)$config['saveModel'] : true;
-                $validate = array_key_exists('validate', $config) ? (bool)$config['validate'] : false;
-                $ok = $model->save($validate);
-                $response['modelSaved'] = (bool)$ok;
-                if (!$ok && property_exists($model, 'errors')) {
-                    $response['modelErrors'] = $model->errors;
-                }
-            } catch (\Throwable $e) {
-                $response['modelSaved'] = false;
-                $response['modelError'] = $e->getMessage();
-            }
+            $finalPath = rtrim($finalDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $safeName;
+        } else {
+            $finalPath = rtrim($targetPath, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $safeName;
         }
 
-        // Provide some context in response
-        $response['path'] = $targetPath;
-        if ($modelId !== null) $response['modelId'] = $modelId;
-        return $response;
+        if (@rename($tmp_name, $finalPath)) {
+            if (!empty($params['model_attribute']) && !empty($params['model_id'])) {
+                $model = @$modelClass::findOne($params['model_id']);
+                if (!empty($model)) {
+                    @$model->{$params['model_attribute']} = $filename;
+                    @$model->save();
+                }
+            }
+            return true;
+        }
+        return false;
     }
+
 
     public static function convertImage($sourceFile, $targetFile, $targetWidth, $targetHeight)
     {
