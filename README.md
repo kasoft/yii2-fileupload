@@ -34,6 +34,7 @@ Quick Start: Use the widget in a view
 -------------------------------------
 In a view (e.g., views/site/index.php):
 
+
 <?php
 use kasoft\fileupload\FileUpload;
 use yii\helpers\Url;
