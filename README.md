@@ -5,7 +5,7 @@ This extension provides a compact upload widget for Yii2 based on FilePond and a
 
 Features
 --------
-- FilePond as a Yii2 widget (including auto-initialization for plain <input> fields)
+- FilePond as a Yii2 widget (including auto-initialization for plain `<input>` fields)
 - Multiple uploads and acceptance filters (MIME types/extensions)
 - Chunked uploads (enabled by default) to bypass PHP post_max_size limits
 - Server-side UploadHandler with:
@@ -26,7 +26,9 @@ Installation
 ------------
 Install via Composer:
 
+```bash
 composer require kasoft/yii2-fileupload
+```
 
 PSR-4 autoload configuration is included in the package.
 
@@ -35,6 +37,7 @@ Quick Start: Use the widget in a view
 In a view (e.g., views/site/index.php):
 
 
+```php
 <?php
 use kasoft\fileupload\FileUpload;
 use yii\helpers\Url;
@@ -50,11 +53,13 @@ echo FileUpload::widget([
     // 'options' => [ 'chunkUploads' => false ], // FilePond options (see below)
 ]);
 ?>
+```
 
 Multiple instances in the same view
 -----------------------------------
 The widget supports multiple instances via options['instances']:
 
+```php
 <?php
 echo FileUpload::widget([
     'options' => [
@@ -77,8 +82,9 @@ echo FileUpload::widget([
     ],
 ]);
 ?>
+```
 
-Alternative: plain <input> without the widget
+Alternative: plain `<input>` without the widget
 ---------------------------------------------
 The JS helper auto-initializes all inputs with class="filepond" on DOM ready. Supported data attributes:
 - data-url (or data-action)
@@ -90,12 +96,15 @@ The JS helper auto-initializes all inputs with class="filepond" on DOM ready. Su
 
 Example:
 
+```html
 <input type="file" class="filepond" name="file" data-url="/upload/handle" data-multiple="true" data-accepted="image/*" data-maxfiles="5" />
+```
 
 Controller: process the upload
 ------------------------------
 Call the static handler from your action. It returns an array that you typically send back as JSON.
 
+```php
 <?php
 use yii\web\Response;
 use kasoft\fileupload\UploadHandler;
@@ -132,6 +141,7 @@ public function actionHandle($id = null)
     ]);
 }
 ?>
+```
 
 Where are files saved?
 ----------------------
@@ -147,7 +157,7 @@ Chunked uploads (FilePond)
   - POST (init, no $_FILES, header Upload-Length present) -> response: { id: "..." }
   - HEAD (offset check) to ?patch=<id> -> header Upload-Offset
   - PATCH (chunk) to ?patch=<id> with Upload-Offset/Upload-Length/Upload-Name -> appends data; after the final chunk the file is moved to the target directory.
-- The client helper sends the CSRF token automatically as X-CSRF-Token header (from <meta name="csrf-token">). If your CSRF validation blocks PATCH/HEAD, adjust the action accordingly or allow header-based validation. By default the header should suffice.
+- The client helper sends the CSRF token automatically as X-CSRF-Token header (from `<meta name="csrf-token">`). If your CSRF validation blocks PATCH/HEAD, adjust the action accordingly or allow header-based validation. By default the header should suffice.
 
 Responses
 ---------
