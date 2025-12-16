@@ -213,6 +213,7 @@ class UploadHandler
         }
 
         if (@rename($tmp_name, $finalPath)) {
+            @chmod($finalPath, 0644);
             if (!empty($params['model_attribute']) && !empty($params['model_id'])) {
                 $model = @$modelClass::findOne($params['model_id']);
                 if (!empty($model)) {
