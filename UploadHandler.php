@@ -217,7 +217,7 @@ class UploadHandler
             if (!empty($params['model_attribute']) && !empty($params['model_id'])) {
                 $model = @$modelClass::findOne($params['model_id']);
                 if (!empty($model)) {
-                    @$model->{$params['model_attribute']} = $filename;
+                    @$model->{$params['model_attribute']} = $safeName;
                     @$model->save();
                 }
             }
