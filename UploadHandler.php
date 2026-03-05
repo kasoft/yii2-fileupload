@@ -280,7 +280,23 @@ class UploadHandler
         } else {
             $datei = $file;
         }
+        // Transliterate German umlauts before stripping non-ASCII characters
+        $umlautMap = [
+            'ä' => 'ae', 'ö' => 'oe', 'ü' => 'ue',
+            'Ä' => 'Ae', 'Ö' => 'Oe', 'Ü' => 'Ue',
+            'ß' => 'ss',
+        ];
+        $datei = strtr($datei, $umlautMap);
+        // Try iconv transliteration for any remaining non-ASCII characters
+        $transliterated = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $datei);
+        if ($transliterated !== false && $transliterated !== '') {
+            $datei = $transliterated;
+        }
         $datei = mb_ereg_replace("[^A-Za-z0-9\-\_]", '', $datei);
+        // Fallback: if name is empty after sanitization, use a timestamp
+        if ($datei === '' || $datei === null) {
+            $datei = 'upload_' . time();
+        }
         if ($withExtension) {
             return $datei . "." . strtolower($ext);
         } else {
